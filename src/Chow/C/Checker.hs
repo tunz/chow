@@ -1,14 +1,14 @@
 module Chow.C.Checker where
 
-import Text.Parsec
-import Data.Functor.Identity
-import Text.ParserCombinators.Parsec
+import           Data.Functor.Identity
+import           Text.Parsec
+import           Text.ParserCombinators.Parsec
 
-import Chow.Common
-import Chow.Token
-import Chow.C.Parser
-import Chow.C.Ast
-import Chow.C.NullDerefChecker
+import           Chow.C.Ast
+import           Chow.C.NullDerefChecker
+import           Chow.C.Parser
+import           Chow.Common
+import           Chow.Token
 
 tokenize :: String -> String -> IO [TokenPos]
 tokenize fname stream =
@@ -26,13 +26,12 @@ check checkerType paths = check' checkerType paths []
 
 checkOne :: CheckerType -> String -> IO [Report]
 checkOne checkerType path =
-    readSourceCode path
-    >>= tokenize path
-    >>= iterateCheck check'
-  where check' stream =
-          case parse functionParser "" stream of
-            Left err -> []
-            Right fn -> checker checkerType $ parseWildcards fn
+  readSourceCode path >>= tokenize path >>= iterateCheck check'
+  where
+    check' stream =
+      case parse functionParser "" stream of
+        Left err -> []
+        Right fn -> checker checkerType $ parseWildcards fn
 
 checker :: CheckerType -> S -> [Report]
 checker _ = nullDerefChecker
@@ -40,6 +39,6 @@ checker _ = nullDerefChecker
 parseWildcards :: S -> S
 parseWildcards (Function pos id args body) =
   Function pos id parsedArgs parsedBody
-    where
-      parsedArgs = map tryDeclParser args
-      parsedBody = parseExprsInStmt body
+  where
+    parsedArgs = map tryDeclParser args
+    parsedBody = parseExprsInStmt body

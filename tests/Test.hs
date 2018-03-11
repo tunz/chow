@@ -1,9 +1,9 @@
-import Test.Tasty
-import Test.Tasty.HUnit
+import           Test.Tasty
+import           Test.Tasty.HUnit
 
-import C.NullDerefTest
-import C.ParserTest
-import Cpp.ParserTest
+import           C.NullDerefTest
+import           C.ParserTest
+import           Cpp.ParserTest
 
 main = defaultMain tests
 

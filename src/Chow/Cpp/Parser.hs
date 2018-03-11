@@ -1,25 +1,25 @@
 module Chow.Cpp.Parser where
 
-import Text.Parsec (ParsecT)
-import Text.ParserCombinators.Parsec
-import Text.ParserCombinators.Parsec.Token as T
-import Text.ParserCombinators.Parsec.Language
-import Text.ParserCombinators.Parsec.Expr
-import Data.Functor.Identity
-import Data.Tuple (swap)
-import Control.Applicative ((<*), (*>), (<$>), (<*>), (<$))
+import           Control.Applicative                    ((*>), (<$), (<$>),
+                                                         (<*), (<*>))
+import           Data.Functor.Identity
+import           Data.Tuple                             (swap)
+import           Text.Parsec                            (ParsecT)
+import           Text.ParserCombinators.Parsec
+import           Text.ParserCombinators.Parsec.Expr
+import           Text.ParserCombinators.Parsec.Language
+import           Text.ParserCombinators.Parsec.Token    as T
 
-import Chow.Token
-import Chow.Cpp.Ast
+import           Chow.Cpp.Ast
+import           Chow.Token
 
 -- Utilities
-
 parseWildcards :: S -> S
 parseWildcards (Function pos id args body) =
   Function pos id parsedArgs parsedBody
-    where
-      parsedArgs = map tryDeclParser args
-      parsedBody = parseExprsInStmt body
+  where
+    parsedArgs = map tryDeclParser args
+    parsedBody = parseExprsInStmt body
 
 parseExprsInStmt :: Stmt -> Stmt
 parseExprsInStmt stmt =
@@ -27,8 +27,11 @@ parseExprsInStmt stmt =
     CompoundStmt s -> CompoundStmt $ map parseExprsInStmt s
     Line wc -> Stmt $ tryDeclOrExprParser $ WildCard wc
     IfStmt pos expr thenbr (Just elsebr) ->
-      IfStmt pos (tryExprParser expr) (parseExprsInStmt thenbr)
-             (Just $ parseExprsInStmt elsebr)
+      IfStmt
+        pos
+        (tryExprParser expr)
+        (parseExprsInStmt thenbr)
+        (Just $ parseExprsInStmt elsebr)
     IfStmt pos expr thenbr Nothing ->
       IfStmt pos (tryExprParser expr) (parseExprsInStmt thenbr) Nothing
     WhileStmt pos expr thenbr ->
@@ -36,11 +39,18 @@ parseExprsInStmt stmt =
     DoWhileStmt pos expr thenbr ->
       DoWhileStmt pos (tryExprParser expr) (parseExprsInStmt thenbr)
     ForStmt pos init cond inc thenbr ->
-      ForStmt pos (tryDeclOrExprParser init) (tryExprParser cond)
-              (tryExprParser inc) (parseExprsInStmt thenbr)
+      ForStmt
+        pos
+        (tryDeclOrExprParser init)
+        (tryExprParser cond)
+        (tryExprParser inc)
+        (parseExprsInStmt thenbr)
     ForRangeStmt pos decl iterable thenbr ->
-      ForRangeStmt pos (tryDeclParser decl) (tryExprParser iterable)
-                   (parseExprsInStmt thenbr)
+      ForRangeStmt
+        pos
+        (tryDeclParser decl)
+        (tryExprParser iterable)
+        (parseExprsInStmt thenbr)
     SwitchStmt pos expr blk ->
       SwitchStmt pos (tryExprParser expr) (parseExprsInStmt blk)
     CaseStmt pos expr -> CaseStmt pos $ tryExprParser expr
@@ -48,84 +58,86 @@ parseExprsInStmt stmt =
     rest -> rest
 
 -- Declaration Parsers
-
 tryDeclOrExprParser :: Expr -> Expr
 tryDeclOrExprParser (WildCard wc) =
   case parse declParser "" wc of
-    Left err -> tryExprParser $ WildCard wc
+    Left err   -> tryExprParser $ WildCard wc
     Right expr -> expr
 tryDeclOrExprParser rest = rest
 
 tryDeclParser :: Expr -> Expr
 tryDeclParser (WildCard wc) =
   case parse declParser "" wc of
-    Left err -> WildCard wc
+    Left err   -> WildCard wc
     Right expr -> expr
 tryDeclParser rest = rest
 
 declParser :: TkParser Expr
 declParser =
-  VarDecl <$> (typeDeclParser <* lookAhead ((tok "*" >> return Nothing)
-                                        <|> (tok "&" >> return Nothing)
-                                        <|> (getId >> return Nothing)))
-           <*> exprParser
+  VarDecl <$>
+  (typeDeclParser <*
+   lookAhead
+     ((tok "*" >> return Nothing) <|> (tok "&" >> return Nothing) <|>
+      (getId >> return Nothing))) <*>
+  exprParser
 
 isCType s = try $ tok s
+
 pCType :: CType -> [String] -> TkParser CType
 pCType ctype keywords = choice (map isCType keywords) >> return ctype
 
 classIdParser :: TkParser String
 classIdParser = buildExpressionParser ciTable getId <?> "class id expression"
   where
-    ciTable = [ [ postfixChain templateTypeParser ]
-              , [ binary "::" (\x y -> x ++ "::" ++ y) AssocLeft ]
-              ]
+    ciTable =
+      [ [postfixChain templateTypeParser]
+      , [binary "::" (\x y -> x ++ "::" ++ y) AssocLeft]
+      ]
     templateTypeParser = do
       rest <- map unwrapSymOrIde <$> betweenTok "<" ">"
       return $ \e -> e ++ "<" ++ concat rest ++ ">"
-        where
-          unwrapSymOrIde (x, _) = case x of
-                                    Symbol s -> s
-                                    Ide s -> s
+      where
+        unwrapSymOrIde (x, _) =
+          case x of
+            Symbol s -> s
+            Ide s    -> s
 
 typeDeclParser :: TkParser CType
-typeDeclParser = buildExpressionParser tcTable typeParser <?> "type cast expression"
+typeDeclParser =
+  buildExpressionParser tcTable typeParser <?> "type cast expression"
   where
-    tcTable = [[ prefix "const" ConstType
-               , postfix "*" PtrType
-               , postfix "&" RefType]]
+    tcTable =
+      [[prefix "const" ConstType, postfix "*" PtrType, postfix "&" RefType]]
 
 -- Note: Actually, char and signed char can be different
 typeParser :: TkParser CType
-typeParser = pCType CharType ["char", "signed char"]
-         <|> pCType UnsignedCharType ["unsigned char"]
-         <|> pCType ShortType ["short", "short int"
-                              ,"signed short", "signed short int"]
-         <|> pCType UnsignedShortType ["unsigned short", "unsigned short int"]
-         <|> pCType IntType ["int", "signed", "signed int"]
-         <|> pCType UnsignedIntType ["unsigned", "unsigned int"]
-         <|> pCType LongType ["long", "long int", "signed long"
-                             ,"signed long int"]
-         <|> pCType UnsignedLongType ["unsigned long", "unsigned long int"]
-         <|> pCType LongLongType ["long long", "long long int"
-                                 ,"signed long long", "signed long long int"]
-         <|> pCType UnsignedLongLongType ["unsigned long long"
-                                         ,"unsigned long long int"]
-         <|> pCType FloatType ["float"]
-         <|> pCType DoubleType ["double"]
-         <|> pCType LongDoubleType ["long double"]
-         <|> pCType BoolType ["bool"]
-         <|> pCType VoidType ["void"]
-         <|> pCType AutoType ["auto"]
-         <|> tok "struct" *> (ClassType <$> getId)
-         <|> (ClassType <$> classIdParser)
+typeParser =
+  pCType CharType ["char", "signed char"] <|>
+  pCType UnsignedCharType ["unsigned char"] <|>
+  pCType ShortType ["short", "short int", "signed short", "signed short int"] <|>
+  pCType UnsignedShortType ["unsigned short", "unsigned short int"] <|>
+  pCType IntType ["int", "signed", "signed int"] <|>
+  pCType UnsignedIntType ["unsigned", "unsigned int"] <|>
+  pCType LongType ["long", "long int", "signed long", "signed long int"] <|>
+  pCType UnsignedLongType ["unsigned long", "unsigned long int"] <|>
+  pCType
+    LongLongType
+    ["long long", "long long int", "signed long long", "signed long long int"] <|>
+  pCType UnsignedLongLongType ["unsigned long long", "unsigned long long int"] <|>
+  pCType FloatType ["float"] <|>
+  pCType DoubleType ["double"] <|>
+  pCType LongDoubleType ["long double"] <|>
+  pCType BoolType ["bool"] <|>
+  pCType VoidType ["void"] <|>
+  pCType AutoType ["auto"] <|>
+  tok "struct" *> (ClassType <$> getId) <|>
+  (ClassType <$> classIdParser)
 
 -- Expression Parsers
-
 tryExprParser :: Expr -> Expr
 tryExprParser (WildCard wc) =
   case parse exprParser "" wc of
-    Left err -> WildCard wc
+    Left err   -> WildCard wc
     Right expr -> expr
 tryExprParser rest = rest
 
@@ -133,7 +145,8 @@ exprParser :: TkParser Expr
 exprParser = buildExpressionParser table term <?> "expression"
 
 typeCastExprParser :: TkParser CType
-typeCastExprParser = buildExpressionParser tcTable typeParser <?> "type cast expression"
+typeCastExprParser =
+  buildExpressionParser tcTable typeParser <?> "type cast expression"
   where
     tcTable = [[postfix "*" PtrType, postfix "&" RefType]]
 
@@ -159,82 +172,103 @@ ternaryCondParser = do
   falseExpr <- exprParser
   return $ \e -> TernaryCond e trueExpr falseExpr
 
-term = tok "(" *> exprParser <* tok ")"
-   <|> Var <$> getPosition <*> classIdParser
-   <|> uncurry Value <$> getPConst
-   <?> "simple expression"
+term =
+  tok "(" *> exprParser <* tok ")" <|> Var <$> getPosition <*> classIdParser <|>
+  uncurry Value <$> getPConst <?> "simple expression"
 
-table = [ [ postfix "++" (UnOp PostInc)
-          , postfix "--" (UnOp PostDec)
-          , postfixChain callParser
-          , postfixChain arrayAccessParser
-          , binaryPos "." MemberAccess AssocLeft
-          , binaryPos "->" MemberPtrAccess AssocLeft ]
-        , [ prefix "++" (UnOp PreInc)
-          , prefix "--" (UnOp PreDec)
-          , prefixChain (try typeCastParser)
-          , prefix "*" (UnOp DeRef)
-          , prefix "&" (UnOp AddrOf)
-          , prefix "sizeof" (UnOp SizeOf)
+table =
+  [ [ postfix "++" (UnOp PostInc)
+    , postfix "--" (UnOp PostDec)
+    , postfixChain callParser
+    , postfixChain arrayAccessParser
+    , binaryPos "." MemberAccess AssocLeft
+    , binaryPos "->" MemberPtrAccess AssocLeft
+    ]
+  , [ prefix "++" (UnOp PreInc)
+    , prefix "--" (UnOp PreDec)
+    , prefixChain (try typeCastParser)
+    , prefix "*" (UnOp DeRef)
+    , prefix "&" (UnOp AddrOf)
+    , prefix "sizeof" (UnOp SizeOf)
           --, prefix "_Alignof" (UnOp AlignOf)
-          , prefix "!" (UnOp Not)
-          , prefix "~" (UnOp Negate)
-          , prefix "+" (UnOp Plus)
-          , prefix "-" (UnOp Minus) ]
-        , [ binary "*" (BinOp Mul) AssocLeft
-          , binary "/" (BinOp Div) AssocLeft
-          , binary "%" (BinOp Mod) AssocLeft ]
-        , [ binary "+" (BinOp Add) AssocLeft
-          , binary "-" (BinOp Sub) AssocLeft ]
-        , [ binary "<<" (BinOp BitShiftLeft) AssocLeft
+    , prefix "!" (UnOp Not)
+    , prefix "~" (UnOp Negate)
+    , prefix "+" (UnOp Plus)
+    , prefix "-" (UnOp Minus)
+    ]
+  , [ binary "*" (BinOp Mul) AssocLeft
+    , binary "/" (BinOp Div) AssocLeft
+    , binary "%" (BinOp Mod) AssocLeft
+    ]
+  , [binary "+" (BinOp Add) AssocLeft, binary "-" (BinOp Sub) AssocLeft]
+  , [ binary "<<" (BinOp BitShiftLeft) AssocLeft
         -- Sometimes, there are "<t1<t2>>" case. so temporarily we just hack it.
-          , Infix (try (tok ">" >> tok ">" >> return (BinOp BitShiftRight))) AssocLeft ]
-        , [ binary "<" (BinOp Lt) AssocLeft
-          , binary "<=" (BinOp Lte) AssocLeft
-          , binary ">=" (BinOp Gte) AssocLeft
-          , binary ">" (BinOp Gt) AssocLeft ]
-        , [ binary "==" (BinOp Eq) AssocLeft
-          , binary "!=" (BinOp Neq) AssocLeft ]
-        , [ binary "&" (BinOp BitAnd) AssocLeft ]
-        , [ binary "^" (BinOp BitXor) AssocLeft ]
-        , [ binary "|" (BinOp BitOr) AssocLeft ]
-        , [ binary "&&" (BinOp And) AssocLeft ]
-        , [ binary "||" (BinOp Or) AssocLeft ]
-        , [ postfixChain ternaryCondParser ]
-        , [ binary "=" (Assign NoBinOp) AssocRight
-          , binary "+=" (Assign Add) AssocRight
-          , binary "-=" (Assign Sub) AssocRight
-          , binary "*=" (Assign Mul) AssocRight
-          , binary "/=" (Assign Div) AssocRight
-          , binary "%=" (Assign Mod) AssocRight
-          , binary "<<=" (Assign BitShiftLeft) AssocRight
-          , binary ">>=" (Assign BitShiftRight) AssocRight
-          , binary "&=" (Assign BitAnd) AssocRight
-          , binary "^=" (Assign BitXor) AssocRight
-          , binary "|=" (Assign BitOr) AssocRight]
-        , [ binary "," Comma AssocLeft ]
-        , [postfix ";" id]
-        ]
+    , Infix (try (tok ">" >> tok ">" >> return (BinOp BitShiftRight))) AssocLeft
+    ]
+  , [ binary "<" (BinOp Lt) AssocLeft
+    , binary "<=" (BinOp Lte) AssocLeft
+    , binary ">=" (BinOp Gte) AssocLeft
+    , binary ">" (BinOp Gt) AssocLeft
+    ]
+  , [binary "==" (BinOp Eq) AssocLeft, binary "!=" (BinOp Neq) AssocLeft]
+  , [binary "&" (BinOp BitAnd) AssocLeft]
+  , [binary "^" (BinOp BitXor) AssocLeft]
+  , [binary "|" (BinOp BitOr) AssocLeft]
+  , [binary "&&" (BinOp And) AssocLeft]
+  , [binary "||" (BinOp Or) AssocLeft]
+  , [postfixChain ternaryCondParser]
+  , [ binary "=" (Assign NoBinOp) AssocRight
+    , binary "+=" (Assign Add) AssocRight
+    , binary "-=" (Assign Sub) AssocRight
+    , binary "*=" (Assign Mul) AssocRight
+    , binary "/=" (Assign Div) AssocRight
+    , binary "%=" (Assign Mod) AssocRight
+    , binary "<<=" (Assign BitShiftLeft) AssocRight
+    , binary ">>=" (Assign BitShiftRight) AssocRight
+    , binary "&=" (Assign BitAnd) AssocRight
+    , binary "^=" (Assign BitXor) AssocRight
+    , binary "|=" (Assign BitOr) AssocRight
+    ]
+  , [binary "," Comma AssocLeft]
+  , [postfix ";" id]
+  ]
 
-binaryPos name fun = Infix (do{ pos <- getPosition; tok name; return $ fun pos })
-binary name fun = Infix (do{ tok name; return fun })
+binaryPos name fun =
+  Infix
+    (do pos <- getPosition
+        tok name
+        return $ fun pos)
+
+binary name fun =
+  Infix
+    (do tok name
+        return fun)
+
 prefixChain p = Prefix . chainl1 p $ return (.)
+
 postfixChain p = Postfix . chainl1 p $ return (flip (.))
-prefix  name fun = prefixChain (do{ tok name; return fun })
-postfix name fun = postfixChain (do{ tok name; return fun })
+
+prefix name fun =
+  prefixChain
+    (do tok name
+        return fun)
+
+postfix name fun =
+  postfixChain
+    (do tok name
+        return fun)
 
 -- Control Flow Parsers
-
 functionParser :: TkParser S
 functionParser = do
-  typeDeclParser;
+  typeDeclParser
   pos <- getPosition
   id <- fnNameParser -- TODO: handle XXX::fname
   args <- splitArgs <$> betweenTok "(" ")"
   body <- fnBodyParser
   return $ Function pos id args body
-    where
-      fnNameParser = try (getId *> tok "::" *> fnNameParser) <|> getId
+  where
+    fnNameParser = try (getId *> tok "::" *> fnNameParser) <|> getId
 
 ifParser :: TkParser Stmt
 ifParser = do
@@ -268,7 +302,7 @@ doWhileParser = do
 forParser :: TkParser Stmt
 forParser = do
   position <- pTok "for"
-  (init: cond: inc: _) <- splitConds <$> betweenTok "(" ")"
+  (init:cond:inc:_) <- splitConds <$> betweenTok "(" ")"
   block <- blockParser
   return $ ForStmt position (WildCard init) (WildCard cond) (WildCard inc) block
 
@@ -278,11 +312,11 @@ forRangeParser = do
   (decl, iterable) <- splitDeclIter <$> betweenTok "(" ")"
   block <- blockParser
   return $ ForRangeStmt position (WildCard decl) (WildCard iterable) block
-    where
-      splitDeclIter toks =
-        case break (\(t,pos) -> t == Symbol ":") toks of
-          (f, x:xs) -> (f, xs)
-          (f, []) -> (f, [])
+  where
+    splitDeclIter toks =
+      case break (\(t, pos) -> t == Symbol ":") toks of
+        (f, x:xs) -> (f, xs)
+        (f, [])   -> (f, [])
 
 switchParser :: TkParser Stmt
 switchParser = do
@@ -311,10 +345,13 @@ returnParser = do
 
 breakParser :: TkParser Stmt
 breakParser = tok "break" >> tok ";" >> return BreakStmt
+
 continueParser :: TkParser Stmt
 continueParser = tok "continue" >> tok ";" >> return ContinueStmt
+
 gotoParser :: TkParser Stmt
 gotoParser = tok "goto" *> getId <* tok ";" >>= \e -> return (GotoStmt e)
+
 labelParser :: TkParser Stmt
 labelParser = try $ getId <* tok ":" >>= \e -> return (LabelStmt e)
 
@@ -324,48 +361,44 @@ blockParser = bracesBlockParser <|> stmtBlockParser
     bracesBlockParser = do
       toks <- betweenTok "{" "}"
       case parse stmtsParser "" toks of
-        Left err -> fail "Fail to parse a block"
+        Left err    -> fail "Fail to parse a block"
         Right stmts -> return stmts
-    stmtBlockParser = CompoundStmt . (:[]) <$> stmtParser
+    stmtBlockParser = CompoundStmt . (: []) <$> stmtParser
 
 fnBodyParser :: TkParser Stmt
 fnBodyParser = do
   toks <- betweenTok "{" "}"
   case parse stmtsParser "" toks of
-    Left err -> fail "Fail to parse a function body"
+    Left err    -> fail "Fail to parse a function body"
     Right stmts -> return stmts
 
 stmtsParser :: TkParser Stmt
 stmtsParser = CompoundStmt <$> manyTill stmtParser eof
 
 stmtParser :: TkParser Stmt
-stmtParser = ifParser
-         <|> doWhileParser
-         <|> whileParser
-         <|> try forParser
-         <|> try forRangeParser
-         <|> switchParser
-         <|> caseParser
-         <|> caseDefaultParser
-         <|> returnParser
-         <|> breakParser
-         <|> continueParser
-         <|> gotoParser
-         <|> labelParser
-         <|> try (Line <$> skipToTok ";")
-         <|> Line <$> manyTill anyTok eof
-         <?> "stmt"
+stmtParser =
+  ifParser <|> doWhileParser <|> whileParser <|> try forParser <|>
+  try forRangeParser <|>
+  switchParser <|>
+  caseParser <|>
+  caseDefaultParser <|>
+  returnParser <|>
+  breakParser <|>
+  continueParser <|>
+  gotoParser <|>
+  labelParser <|>
+  try (Line <$> skipToTok ";") <|>
+  Line <$> manyTill anyTok eof <?> "stmt"
 
 -- Utilities
-
 splitConds :: [TokenPos] -> [[TokenPos]]
 splitConds [] = []
 splitConds toks = first : splitConds rest
   where
     (first, rest) =
-      case break (\(t,pos) -> t == Symbol ";") toks of
+      case break (\(t, pos) -> t == Symbol ";") toks of
         (f, x:xs) -> (f, xs)
-        (f, []) -> (f, [])
+        (f, [])   -> (f, [])
 
 -- We need to handle the following cases:
 -- fn1(fn2(arg1, arg2), arg3)
@@ -378,14 +411,14 @@ splitArgs toks = WildCard first : splitArgs rest
     findFirst acc (_, _) [] = (reverse acc, [])
     findFirst acc (paren, lt) (t:ts) =
       case t of
-        (Symbol "(", _) -> findFirst (t:acc) (paren+1, lt) ts
-        (Symbol "<", _) -> findFirst (t:acc) (paren, lt+1) ts
-        (Symbol ")", _) -> findFirst (t:acc) (paren-1, lt) ts
-        (Symbol ">", _) -> findFirst (t:acc) (paren, lt-1) ts
-        (Symbol ",", _) | paren /= 0 || lt /= 0 ->
-          findFirst (t:acc) (paren, lt) ts
+        (Symbol "(", _) -> findFirst (t : acc) (paren + 1, lt) ts
+        (Symbol "<", _) -> findFirst (t : acc) (paren, lt + 1) ts
+        (Symbol ")", _) -> findFirst (t : acc) (paren - 1, lt) ts
+        (Symbol ">", _) -> findFirst (t : acc) (paren, lt - 1) ts
+        (Symbol ",", _)
+          | paren /= 0 || lt /= 0 -> findFirst (t : acc) (paren, lt) ts
         (Symbol ",", _) -> (reverse acc, ts)
-        _ -> findFirst (t:acc) (paren, lt) ts
+        _ -> findFirst (t : acc) (paren, lt) ts
 
 -- TODO(tunz): optimize this func?
 unwrap :: String -> String -> [TokenPos] -> [TokenPos]
@@ -394,20 +427,28 @@ unwrap first last toks =
     Just ts -> unwrapLast [] ts
     Nothing -> toks
   where
-    unwrapFirst ((t,pos):ts) = if t == Symbol first then Just ts else Nothing
-    unwrapLast acc [(t,pos)] = if t == Symbol last then reverse acc else toks
-    unwrapLast acc (t:ts) = unwrapLast (t:acc) ts
+    unwrapFirst ((t, pos):ts) =
+      if t == Symbol first
+        then Just ts
+        else Nothing
+    unwrapLast acc [(t, pos)] =
+      if t == Symbol last
+        then reverse acc
+        else toks
+    unwrapLast acc (t:ts) = unwrapLast (t : acc) ts
     unwrapLast acc [] = toks
 
 skipTo :: TkParser [TokenPos] -> TkParser [TokenPos]
 skipTo p = p <|> ((:) <$> anyTok <*> skipTo p)
+
 skipToTok :: String -> TkParser [TokenPos]
-skipToTok t = (:[]) <$> tok t <|> ((:) <$> anyTok <*> skipToTok t)
+skipToTok t = (: []) <$> tok t <|> ((:) <$> anyTok <*> skipToTok t)
+
 skipToTokNot :: String -> TkParser [TokenPos]
 skipToTokNot t = [] <$ tok t <|> ((:) <$> anyTok <*> skipToTokNot t)
 
-advance _ _ ((_, pos) : _) = pos
-advance pos _ [] = pos
+advance _ _ ((_, pos):_) = pos
+advance pos _ []         = pos
 
 anyTok :: TkParser TokenPos
 anyTok = tokenPrim show advance Just
@@ -416,90 +457,199 @@ betweenTok first last = unwrap first last <$> betweenTok' first last
   where
     betweenTok' first last = (:) <$> tok first <*> balance first last
     balance f l =
-      skipTo $ (:[]) <$> tok l <|> (++) <$> betweenTok' f l <*> balance f l
+      skipTo $ (: []) <$> tok l <|> (++) <$> betweenTok' f l <*> balance f l
 
 tok :: String -> TkParser TokenPos
 tok x = tokenPrim show advance testTok
- where
-   testTok (t, pos) = if Symbol x == t || Ide x == t then Just (t, pos)
-                                                     else Nothing
+  where
+    testTok (t, pos) =
+      if Symbol x == t || Ide x == t
+        then Just (t, pos)
+        else Nothing
 
 pTok :: String -> TkParser SourcePos
 pTok x = tokenPrim show advance testTok
- where
-   testTok (t, pos) = if Symbol x == t then Just pos else Nothing
+  where
+    testTok (t, pos) =
+      if Symbol x == t
+        then Just pos
+        else Nothing
 
 getPId :: TkParser (SourcePos, String)
 getPId = tokenPrim show advance testTok
- where
-   testTok (Ide id, pos) = Just (pos, id)
-   testTok _           = Nothing
+  where
+    testTok (Ide id, pos) = Just (pos, id)
+    testTok _             = Nothing
 
 getPConst :: TkParser (SourcePos, Const)
 getPConst = tokenPrim show advance testTok
- where
-   testTok (Const val, pos) = Just (pos, val)
-   testTok _           = Nothing
+  where
+    testTok (Const val, pos) = Just (pos, val)
+    testTok _                = Nothing
 
 getSym :: TkParser String
 getSym = tokenPrim show advance testTok
- where
-   testTok (Symbol id, _) = Just id
-   testTok _              = Nothing
+  where
+    testTok (Symbol id, _) = Just id
+    testTok _              = Nothing
 
 getId :: TkParser String
 getId = tokenPrim show advance testTok
- where
-   testTok (Ide id, _) = Just id
-   testTok _           = Nothing
+  where
+    testTok (Ide id, _) = Just id
+    testTok _           = Nothing
 
 getConst :: TkParser Const
 getConst = tokenPrim show advance testTok
- where
-   testTok (Const val, _) = Just val
-   testTok _           = Nothing
+  where
+    testTok (Const val, _) = Just val
+    testTok _              = Nothing
 
 -- Tokenization
-
 parsePos :: Parser Token -> Parser TokenPos
 parsePos p = fmap swap $ (,) <$> getPosition <*> p
 
 pToken :: Parser TokenPos
-pToken = choice [ parsePos $ Symbol <$> pSymbol
-                , parsePos $ Const . Str <$> try cStringLiteral
-                , parsePos $ Const . Str <$> try cCharLiteral
-                , parsePos $ Ide <$> T.identifier lexer
-                , parsePos $ Symbol <$> pOperator
-                , parsePos $ Const . IntNum <$> try (T.integer lexer)
-                , parsePos $ Const . FloatNum <$> try (T.float lexer)
-                , parsePos $ Symbol <$> T.operator lexer]
+pToken =
+  choice
+    [ parsePos $ Symbol <$> pSymbol
+    , parsePos $ Const . Str <$> try cStringLiteral
+    , parsePos $ Const . Str <$> try cCharLiteral
+    , parsePos $ Ide <$> T.identifier lexer
+    , parsePos $ Symbol <$> pOperator
+    , parsePos $ Const . IntNum <$> try (T.integer lexer)
+    , parsePos $ Const . FloatNum <$> try (T.float lexer)
+    , parsePos $ Symbol <$> T.operator lexer
+    ]
 
 pTokens :: Parser [TokenPos]
 pTokens = ws *> manyTill (pToken <* ws) eof
 
 -- Grammar specification for C++
+keywords =
+  [ "asm"
+  , "else"
+  , "new"
+  , "this"
+  , "auto"
+  , "enum"
+  , "operator"
+  , "throw"
+  , "bool"
+  , "explicit"
+  , "private"
+  , "true"
+  , "break"
+  , "export"
+  , "protected"
+  , "try"
+  , "case"
+  , "extern"
+  , "public"
+  , "typedef"
+  , "catch"
+  , "false"
+  , "register"
+  , "typeid"
+  , "char"
+  , "float"
+  , "reinterpret_cast"
+  , "typename"
+  , "class"
+  , "for"
+  , "return"
+  , "union"
+  , "const_cast"
+  , "const"
+  , "friend"
+  , "short"
+  , "unsigned"
+  , "goto"
+  , "signed"
+  , "using"
+  , "continue"
+  , "if"
+  , "sizeof"
+  , "virtual"
+  , "default"
+  , "inline"
+  , "static"
+  , "void"
+  , "delete"
+  , "int"
+  , "static_cast"
+  , "volatile"
+  , "do"
+  , "long"
+  , "struct"
+  , "wchar_t"
+  , "double"
+  , "mutable"
+  , "switch"
+  , "while"
+  , "dynamic_cast"
+  , "namespace"
+  , "template"
+  ]
 
-keywords = ["asm", "else", "new", "this", "auto", "enum",
-            "operator", "throw", "bool", "explicit", "private",
-            "true", "break", "export", "protected", "try", "case",
-            "extern", "public", "typedef", "catch", "false", "register",
-            "typeid", "char", "float", "reinterpret_cast", "typename",
-            "class", "for", "return", "union", "const_cast", "const", "friend",
-            "short", "unsigned", "goto", "signed", "using", "continue", "if",
-            "sizeof", "virtual", "default", "inline", "static", "void",
-            "delete", "int", "static_cast", "volatile", "do", "long", "struct",
-            "wchar_t", "double", "mutable", "switch", "while", "dynamic_cast",
-            "namespace", "template"]
-ops = ["<<=", ">>=", "...", "++", "--", "==", "!=", ">=", "<=",
-      "&&", "||", "<<", "+=", "-=", "*=", "%=", "/=",
-      "&=", "^=", "|=", "->", "::", "=", ">", "<", "-", "+", "*",
-      "{", "}", "[", "]", "(", ")", ",", ":", ",", ";",
-      "/", "%", "&", "|", "~", "!", "^", "."]
+ops =
+  [ "<<="
+  , ">>="
+  , "..."
+  , "++"
+  , "--"
+  , "=="
+  , "!="
+  , ">="
+  , "<="
+  , "&&"
+  , "||"
+  , "<<"
+  , "+="
+  , "-="
+  , "*="
+  , "%="
+  , "/="
+  , "&="
+  , "^="
+  , "|="
+  , "->"
+  , "::"
+  , "="
+  , ">"
+  , "<"
+  , "-"
+  , "+"
+  , "*"
+  , "{"
+  , "}"
+  , "["
+  , "]"
+  , "("
+  , ")"
+  , ","
+  , ":"
+  , ","
+  , ";"
+  , "/"
+  , "%"
+  , "&"
+  , "|"
+  , "~"
+  , "!"
+  , "^"
+  , "."
+  ]
 
-isSymbol s = try $ string s <* notFollowedBy alphaNum <* notFollowedBy (char '_')
+isSymbol s =
+  try $ string s <* notFollowedBy alphaNum <* notFollowedBy (char '_')
+
 pSymbol = choice $ map isSymbol keywords
+
 isOperator s = try $ string s
+
 pOperator = choice $ map isOperator ops
+
 -- FIXME: this is simple but dumb
 -- T.stringLiteral cannot parse " \(newline) " cases...
 cStringLiteral = multilineLiteral <|> others
@@ -507,38 +657,47 @@ cStringLiteral = multilineLiteral <|> others
     multilineLiteral = do
       char 'R' *> char '"'
       delimiter <- many (noneOf "(") <* char '('
-      s <- manyTill anyChar (try $ lookAhead $ char ')' <* string delimiter <* char '"')
+      s <-
+        manyTill
+          anyChar
+          (try $ lookAhead $ char ')' <* string delimiter <* char '"')
       string (")" ++ delimiter ++ "\"")
       return s
-    others = optional (string "L" <|> string "u8" <|> string "u" <|> string "U")
-      *> char '"' *> manyTill stringChar (char '"')
-    stringChar = try (string "\\\"" >> return '"')
-             <|> try (string "\\\\" >> return '\\')
-             <|> anyChar
+    others =
+      optional (string "L" <|> string "u8" <|> string "u" <|> string "U") *>
+      char '"' *>
+      manyTill stringChar (char '"')
+    stringChar =
+      try (string "\\\"" >> return '"') <|> try (string "\\\\" >> return '\\') <|>
+      anyChar
+
 cCharLiteral = defaultChar <|> charu8 <|> charL <|> charu <|> charU
   where
-    defaultChar = char '\'' *> manyTill anyChar (lookAhead $ string "'") <* char '\''
+    defaultChar =
+      char '\'' *> manyTill anyChar (lookAhead $ string "'") <* char '\''
     charu8 = string "u8" *> defaultChar
     charL = char 'L' *> defaultChar
     charu = char 'u' *> defaultChar
     charU = char 'U' *> defaultChar
 
 cDef :: LanguageDef st
-cDef = emptyDef
- { commentStart = "/*"
- , commentEnd = "*/"
- , commentLine = "//"
- , identStart = letter <|> char '_'
- , identLetter = alphaNum <|> oneOf "_"
- , reservedOpNames = ops
- , reservedNames = keywords
- }
+cDef =
+  emptyDef
+  { commentStart = "/*"
+  , commentEnd = "*/"
+  , commentLine = "//"
+  , identStart = letter <|> char '_'
+  , identLetter = alphaNum <|> oneOf "_"
+  , reservedOpNames = ops
+  , reservedNames = keywords
+  }
 
 lexer :: T.GenTokenParser String u Identity
 lexer = T.makeTokenParser cDef
 
 lexeme, parens :: ParsecT String u Identity a -> ParsecT String u Identity a
 lexeme = T.lexeme lexer
+
 parens = T.parens lexer
 
 symbol :: String -> ParsecT String u Identity String
@@ -546,6 +705,7 @@ symbol = T.symbol lexer
 
 reserved, reservedOp :: String -> ParsecT String u Identity ()
 reserved = T.reserved lexer
+
 reservedOp = T.reservedOp lexer
 
 ws :: ParsecT String u Identity ()
@@ -556,4 +716,5 @@ natural = T.natural lexer
 
 semi, identifier :: ParsecT String u Identity String
 semi = T.semi lexer
+
 identifier = T.identifier lexer
